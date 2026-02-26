@@ -1,0 +1,13 @@
+.{
+    .name = .libffi,
+    .version = "3.5.2",
+    .dependencies = .{
+        .upstream = .{
+            .url = "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz",
+            .hash = "N-V-__8AAFDiVQA3Q01T64sEaf0mSRyePtaGEqV9gZ37pSti",
+        },
+    },
+    .minimum_zig_version = "0.16.0-dev.2653+784e89fd4",
+    .paths = .{ "build.zig", "build.zig.zon" },
+    .fingerprint = 0x806ae67927da1142,
+}
