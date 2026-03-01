@@ -15,6 +15,15 @@ jobs:
       matrix:
         zig-version: [master]
         os: [ubuntu-latest]
+        target:
+          - x86_64-linux-gnu
+          - x86_64-linux-musl
+          - aarch64-linux-gnu
+          - aarch64-linux-musl
+          - x86_64-macos-none
+          - x86_64-windows-gnu
+          - x86_64-freebsd-none
+          - aarch64-freebsd-none
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -29,4 +38,4 @@ jobs:
         run: zig fmt --ast-check --check .
 
       - name: Build
-        run: zig build --summary all
+        run: zig build -Dtarget=${{ matrix.target }} --summary all

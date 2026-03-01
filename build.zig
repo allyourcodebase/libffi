@@ -1,34 +1,31 @@
 const std = @import("std");
+const LinkMode = std.builtin.LinkMode;
+
 const manifest = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const linkage = b.option(std.builtin.LinkMode, "linkage", "Library linkage type") orelse .static;
 
-    const upstream = b.dependency("upstream", .{});
-    const src = upstream.path("");
     const arch = target.result.cpu.arch;
     const os = target.result.os.tag;
-    const is_linux = os == .linux;
-    const is_posix = is_linux or os.isBSD();
 
-    const arch_dir: []const u8 = switch (arch) {
-        .x86_64, .x86 => "src/x86",
-        .aarch64 => "src/aarch64",
-        .arm => "src/arm",
-        else => return error.UnsupportedArch,
+    const options = .{
+        .linkage = b.option(LinkMode, "linkage", "Library linkage type") orelse
+            .static,
     };
 
-    const target_name: []const u8 = switch (arch) {
-        .x86_64 => "X86_64",
-        .x86 => "X86",
-        .aarch64 => "AARCH64",
-        .arm => "ARM",
-        else => return error.UnsupportedArch,
+    const upstream = b.dependency("libffi_c", .{});
+    const src = upstream.path("");
+
+    const arch_dir, const target_name, const arch_srcs: []const []const u8, const arch_asm: []const []const u8 = switch (arch) {
+        .x86_64 => .{ "src/x86", "X86_64", &.{ "src/x86/ffi64.c", "src/x86/ffiw64.c" }, if (os == .windows) &.{"src/x86/win64.S"} else &.{ "src/x86/unix64.S", "src/x86/win64.S" } },
+        .x86 => .{ "src/x86", "X86", &.{"src/x86/ffi.c"}, &.{"src/x86/sysv.S"} },
+        .aarch64 => .{ "src/aarch64", "AARCH64", &.{"src/aarch64/ffi.c"}, &.{"src/aarch64/sysv.S"} },
+        .arm => .{ "src/arm", "ARM", &.{"src/arm/ffi.c"}, &.{"src/arm/sysv.S"} },
+        else => return,
     };
 
-    // ffi.h (autoconf @VARIABLE@ substitution of upstream ffi.h.in)
     const ffi_h = b.addConfigHeader(.{
         .style = .{ .autoconf_at = upstream.path("include/ffi.h.in") },
         .include_path = "ffi.h",
@@ -36,31 +33,21 @@ pub fn build(b: *std.Build) !void {
         .VERSION = manifest.version,
         .TARGET = target_name,
         .HAVE_LONG_DOUBLE = 1,
-        .FFI_EXEC_TRAMPOLINE_TABLE = 0,
+        .FFI_EXEC_TRAMPOLINE_TABLE = @as(i64, if (os == .macos and arch == .aarch64) 1 else 0),
         .FFI_VERSION_STRING = manifest.version,
         .FFI_VERSION_NUMBER = 30502,
     });
 
-    // fficonfig.h (generated via WriteFile for the FFI_HIDDEN macro block)
     const config_wf = b.addWriteFiles();
     _ = config_wf.add("fficonfig.h", b.fmt(
         \\#ifndef LIBFFI_CONFIG_H
         \\#define LIBFFI_CONFIG_H
-        \\
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\{s}
-        \\
+        \\#define HAVE_LONG_DOUBLE 1
+        \\#define STDC_HEADERS 1
+        \\#define HAVE_INTTYPES_H 1
+        \\#define HAVE_STDINT_H 1
+        \\#define HAVE_STRING_H 1
+        \\{s}{s}{s}{s}{s}{s}
         \\#ifdef HAVE_HIDDEN_VISIBILITY_ATTRIBUTE
         \\#ifdef LIBFFI_ASM
         \\#ifdef __APPLE__
@@ -78,67 +65,40 @@ pub fn build(b: *std.Build) !void {
         \\#define FFI_HIDDEN
         \\#endif
         \\#endif
-        \\
         \\#endif
         \\
     , .{
-        "#define HAVE_LONG_DOUBLE 1",
-        "#define STDC_HEADERS 1",
-        "#define HAVE_ALLOCA_H 1",
-        "#define HAVE_INTTYPES_H 1",
-        "#define HAVE_STDINT_H 1",
-        "#define HAVE_STRING_H 1",
-        if (is_posix) "#define HAVE_HIDDEN_VISIBILITY_ATTRIBUTE 1" else "",
-        if (is_posix) "#define HAVE_MMAP 1" else "",
-        if (is_posix) "#define HAVE_MPROTECT 1" else "",
-        if (is_linux) "#define HAVE_MEMFD_CREATE 1" else "",
-        if (is_posix) "#define FFI_MMAP_EXEC_WRIT 1" else "",
-        if (is_linux) "#define FFI_EXEC_STATIC_TRAMP 1" else "",
-        if (arch == .x86_64 or arch == .x86) "#define HAVE_AS_X86_PCREL 1" else "",
+        if (os == .linux or os == .macos) "#define HAVE_ALLOCA_H 1\n" else "",
+        if (os != .linux and os != .windows) "#define HAVE_HIDDEN_VISIBILITY_ATTRIBUTE 1\n" else "",
+        if (os != .linux) "#define HAVE_MMAP 1\n#define HAVE_MPROTECT 1\n#define FFI_MMAP_EXEC_WRIT 1\n" else "",
+        if (os == .linux) "#define HAVE_MEMFD_CREATE 1\n#define HAVE_SYS_MEMFD_H 1\n" else "",
+        if (os == .linux) "#define FFI_EXEC_STATIC_TRAMP 1\n" else "",
+        if (arch == .x86_64 or arch == .x86) "#define HAVE_AS_X86_PCREL 1\n" else "",
     }));
 
-    // Module
+    const flags: []const []const u8 = &.{if (os != .windows) "-fvisibility=hidden" else ""};
+
     const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
     mod.addConfigHeader(ffi_h);
     mod.addIncludePath(config_wf.getDirectory());
-    mod.addIncludePath(src.path(b, "include"));
-    mod.addIncludePath(src.path(b, arch_dir));
+    mod.addIncludePath(upstream.path("include"));
+    mod.addIncludePath(upstream.path(arch_dir));
+    mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = srcs });
+    mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = arch_srcs });
+    for (arch_asm) |asm_file| mod.addAssemblyFile(src.path(b, asm_file));
 
-    const flags: []const []const u8 = &.{"-fvisibility=hidden"};
-
-    mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = &.{
-        "src/prep_cif.c",
-        "src/types.c",
-        "src/raw_api.c",
-        "src/java_raw_api.c",
-        "src/closures.c",
-        "src/tramp.c",
-    } });
-
-    switch (arch) {
-        .x86_64 => {
-            mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = &.{ "src/x86/ffi64.c", "src/x86/ffiw64.c" } });
-            mod.addAssemblyFile(src.path(b, "src/x86/unix64.S"));
-            mod.addAssemblyFile(src.path(b, "src/x86/win64.S"));
-        },
-        .x86 => {
-            mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = &.{"src/x86/ffi.c"} });
-            mod.addAssemblyFile(src.path(b, "src/x86/sysv.S"));
-        },
-        .aarch64 => {
-            mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = &.{"src/aarch64/ffi.c"} });
-            mod.addAssemblyFile(src.path(b, "src/aarch64/sysv.S"));
-        },
-        .arm => {
-            mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = &.{"src/arm/ffi.c"} });
-            mod.addAssemblyFile(src.path(b, "src/arm/sysv.S"));
-        },
-        else => return error.UnsupportedArch,
-    }
-
-    // Library
-    const lib = b.addLibrary(.{ .name = "ffi", .root_module = mod, .linkage = linkage });
+    const lib = b.addLibrary(.{
+        .name = "ffi",
+        .root_module = mod,
+        .linkage = options.linkage,
+        .version = try .parse(manifest.version),
+    });
     lib.installConfigHeader(ffi_h);
-    lib.installHeader(src.path(b, b.pathJoin(&.{ arch_dir, "ffitarget.h" })), "ffitarget.h");
+    lib.installHeader(upstream.path(b.pathJoin(&.{ arch_dir, "ffitarget.h" })), "ffitarget.h");
     b.installArtifact(lib);
 }
+
+const srcs: []const []const u8 = &.{
+    "src/prep_cif.c",     "src/types.c",    "src/raw_api.c",
+    "src/java_raw_api.c", "src/closures.c", "src/tramp.c",
+};
