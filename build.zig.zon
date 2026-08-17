@@ -1,13 +1,18 @@
 .{
     .name = .libffi,
+    .fingerprint = 0x806ae67927da1142, // Changing this has security and trust implications.
     .version = "3.5.2",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "LICENSE",
+        "README.md",
+        "build.zig",
+        "build.zig.zon",
+    },
     .dependencies = .{
-        .libffi_c = .{
+        .libffi = .{
             .url = "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz",
             .hash = "N-V-__8AAFDiVQA3Q01T64sEaf0mSRyePtaGEqV9gZ37pSti",
         },
     },
-    .minimum_zig_version = "0.16.0-dev.2653+784e89fd4",
-    .paths = .{ "build.zig", "build.zig.zon", "README.md", "LICENSE" },
-    .fingerprint = 0x806ae67927da1142,
 }
