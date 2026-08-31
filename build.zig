@@ -1,104 +1,341 @@
 const std = @import("std");
-const LinkMode = std.builtin.LinkMode;
 
 const manifest = @import("build.zig.zon");
+const version = std.SemanticVersion.parse(manifest.version) catch unreachable;
 
 pub fn build(b: *std.Build) !void {
+    const upstream = b.dependency("libffi", .{});
+    const linkage = b.option(std.builtin.LinkMode, "linkage", "Link binaries statically or dynamically");
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Omit debug information in binaries");
+    const code_model = b.option(std.builtin.CodeModel, "code-model", "Assume a particular code model") orelse .default;
 
-    const arch = target.result.cpu.arch;
-    const os = target.result.os.tag;
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true, // libffi requires libc.
+        .single_threaded = false, // libffi requires libpthread.
+        .strip = strip,
+        .code_model = code_model,
+    });
 
-    const options = .{
-        .linkage = b.option(LinkMode, "linkage", "Library linkage type") orelse
-            .static,
+    const cflags = &[_][]const u8{"-fexceptions"};
+
+    mod.addCSourceFiles(.{
+        .root = upstream.path("src"),
+        .files = &.{
+            "closures.c",
+            "java_raw_api.c",
+            "prep_cif.c",
+            "raw_api.c",
+            "tramp.c",
+            "types.c",
+        },
+        .flags = cflags,
+    });
+
+    const t = target.result;
+
+    const arch_name, const arch_target, const arch_sources: []const []const u8 = switch (t.cpu.arch) {
+        .aarch64, .aarch64_be => blk: {
+            // The assembly files are only usable with MSVC tooling.
+            if (t.os.tag == .windows)
+                @panic("No compatible assembly files for aarch64-windows-gnu.");
+
+            break :blk .{
+                "aarch64",
+                "AARCH64",
+                &.{
+                    "ffi.c",
+                    "sysv.S",
+                },
+            };
+        },
+        .arc => .{
+            "arc",
+            "ARC",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .arm, .armeb => blk: {
+            // The assembly files are only usable with MSVC tooling.
+            if (t.os.tag == .windows)
+                @panic("No compatible assembly files for arm-windows-gnu.");
+
+            break :blk .{
+                "arm",
+                "ARM",
+                &.{
+                    "ffi.c",
+                    "sysv.S",
+                },
+            };
+        },
+        .csky => .{
+            "csky",
+            "CSKY",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .loongarch64 => .{
+            "loongarch64",
+            "LOONGARCH64",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .m68k => .{
+            "m68k",
+            "M68K",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .mips, .mipsel, .mips64, .mips64el => .{
+            "mips",
+            "MIPS",
+            &.{
+                "ffi.c",
+                "n32.S",
+                "o32.S",
+            },
+        },
+        .powerpc, .powerpcle, .powerpc64, .powerpc64le => .{
+            "powerpc",
+            switch (t.os.tag) {
+                .freebsd, .netbsd, .openbsd => "POWERPC_FREEBSD",
+                else => if (t.os.tag.isDarwin()) "POWERPC_DARWIN" else "POWERPC",
+            },
+            &switch (t.os.tag) {
+                .freebsd, .netbsd, .openbsd => .{
+                    "ffi.c",
+                    "ffi_sysv.c",
+                    "ppc_closure.S",
+                    "sysv.S",
+                },
+                else => if (t.os.tag.isDarwin()) .{
+                    "darwin.S",
+                    "darwin_closure.S",
+                    "ffi_darwin.c",
+                } else .{
+                    "ffi.c",
+                    "ffi_linux64.c",
+                    "ffi_sysv.c",
+                    "linux64.S",
+                    "linux64_closure.S",
+                    "ppc_closure.S",
+                    "sysv.S",
+                },
+            },
+        },
+        .riscv32, .riscv64 => .{
+            "riscv",
+            "RISCV",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .s390x => .{
+            "s390",
+            "S390",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .sparc, .sparc64 => .{
+            "sparc",
+            "SPARC",
+            &.{
+                "ffi.c",
+                "ffi64.c",
+                "v8.S",
+                "v9.S",
+            },
+        },
+        .x86 => .{
+            "x86",
+            switch (t.os.tag) {
+                .freebsd, .openbsd => "X86_FREEBSD",
+                .windows => "X86_WIN32",
+                else => if (t.os.tag.isDarwin()) "X86_DARWIN" else "X86",
+            },
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        .x86_64 => .{
+            "x86",
+            if (t.os.tag == .windows) "X86_WIN64" else "X86_64",
+            &if (t.os.tag == .windows) .{
+                "ffiw64.c",
+                "win64.S",
+            } else if (t.abi == .gnux32 or t.abi == .muslx32) .{
+                "ffi64.c",
+                "unix64.S",
+            } else .{
+                "ffi64.c",
+                "ffiw64.c",
+                "unix64.S",
+                "win64.S",
+            },
+        },
+        .xtensa => .{
+            "xtensa",
+            "XTENSA",
+            &.{
+                "ffi.c",
+                "sysv.S",
+            },
+        },
+        else => @panic("This target is not supported by libffi."),
     };
 
-    const upstream = b.dependency("libffi_c", .{});
-    const src = upstream.path("");
+    mod.addCSourceFiles(.{
+        .root = upstream.path(b.pathJoin(&.{ "src", arch_name })),
+        .files = arch_sources,
+        .flags = cflags,
+    });
 
-    const arch_dir, const target_name, const arch_srcs: []const []const u8, const arch_asm: []const []const u8 = switch (arch) {
-        .x86_64 => .{ "src/x86", "X86_64", &.{ "src/x86/ffi64.c", "src/x86/ffiw64.c" }, if (os == .windows) &.{"src/x86/win64.S"} else &.{ "src/x86/unix64.S", "src/x86/win64.S" } },
-        .x86 => .{ "src/x86", "X86", &.{"src/x86/ffi.c"}, &.{"src/x86/sysv.S"} },
-        .aarch64 => .{ "src/aarch64", "AARCH64", &.{"src/aarch64/ffi.c"}, &.{"src/aarch64/sysv.S"} },
-        .arm => .{ "src/arm", "ARM", &.{"src/arm/ffi.c"}, &.{"src/arm/sysv.S"} },
-        else => return,
+    inline for (.{ "include", "src", b.pathJoin(&.{ "src", arch_name }) }) |inc|
+        mod.addIncludePath(upstream.path(inc));
+
+    const double_size = t.cTypeByteSize(.double);
+    const long_double_size = t.cTypeByteSize(.longdouble);
+
+    const long_double_variant = switch (t.os.tag) {
+        .freebsd, .netbsd, .openbsd => t.cpu.arch == .powerpc,
+        .linux => t.cpu.arch.isPowerPC(),
+        else => false,
     };
+    const long_double: enum {
+        false,
+        true,
+        mips64,
+    } = if (t.cpu.arch.isMIPS() and (t.os.tag == .freebsd or t.os.tag == .linux or t.os.tag == .openbsd))
+        .mips64
+    else if (long_double_variant or long_double_size > double_size)
+        .true
+    else
+        .false;
 
+    // We only need to substitute a few `@...@` variables in this file, so treat it as CMake-style.
     const ffi_h = b.addConfigHeader(.{
-        .style = .{ .autoconf_at = upstream.path("include/ffi.h.in") },
+        .style = .{ .cmake = upstream.path("include/ffi.h.in") },
         .include_path = "ffi.h",
     }, .{
-        .VERSION = manifest.version,
-        .TARGET = target_name,
-        .HAVE_LONG_DOUBLE = 1,
-        .FFI_EXEC_TRAMPOLINE_TABLE = @as(i64, if (os == .macos and arch == .aarch64) 1 else 0),
+        .FFI_EXEC_TRAMPOLINE_TABLE = t.cpu.arch == .aarch64 and t.os.tag.isDarwin(),
+        .FFI_VERSION_NUMBER = b.fmt("{d}{d:0>2}{d:0>2}\n", .{ version.major, version.minor, version.patch }),
         .FFI_VERSION_STRING = manifest.version,
-        .FFI_VERSION_NUMBER = 30502,
+        .HAVE_LONG_DOUBLE = switch (long_double) {
+            .false => "0",
+            .true => "1",
+            .mips64 => "defined(__mips64)",
+        },
+        .TARGET = arch_target,
+        .VERSION = manifest.version,
     });
 
-    const config_wf = b.addWriteFiles();
-    _ = config_wf.add("fficonfig.h", b.fmt(
-        \\#ifndef LIBFFI_CONFIG_H
-        \\#define LIBFFI_CONFIG_H
-        \\#define HAVE_LONG_DOUBLE 1
-        \\#define STDC_HEADERS 1
-        \\#define HAVE_INTTYPES_H 1
-        \\#define HAVE_STDINT_H 1
-        \\#define HAVE_STRING_H 1
-        \\{s}{s}{s}{s}{s}{s}
-        \\#ifdef HAVE_HIDDEN_VISIBILITY_ATTRIBUTE
-        \\#ifdef LIBFFI_ASM
-        \\#ifdef __APPLE__
-        \\#define FFI_HIDDEN(name) .private_extern name
-        \\#else
-        \\#define FFI_HIDDEN(name) .hidden name
-        \\#endif
-        \\#else
-        \\#define FFI_HIDDEN __attribute__ ((visibility ("hidden")))
-        \\#endif
-        \\#else
-        \\#ifdef LIBFFI_ASM
-        \\#define FFI_HIDDEN(name)
-        \\#else
-        \\#define FFI_HIDDEN
-        \\#endif
-        \\#endif
-        \\#endif
-        \\
-    , .{
-        if (os == .linux or os == .macos) "#define HAVE_ALLOCA_H 1\n" else "",
-        if (os != .linux and os != .windows) "#define HAVE_HIDDEN_VISIBILITY_ATTRIBUTE 1\n" else "",
-        if (os != .linux) "#define HAVE_MMAP 1\n#define HAVE_MPROTECT 1\n#define FFI_MMAP_EXEC_WRIT 1\n" else "",
-        if (os == .linux) "#define HAVE_MEMFD_CREATE 1\n#define HAVE_SYS_MEMFD_H 1\n" else "",
-        if (os == .linux) "#define FFI_EXEC_STATIC_TRAMP 1\n" else "",
-        if (arch == .x86_64 or arch == .x86) "#define HAVE_AS_X86_PCREL 1\n" else "",
-    }));
+    // Note that the libffi source code is not as disciplined as we would like about checking some of these macros. For
+    // example, there are lots of `#ifdef`s that really should be `#if`s. As a result, when an option should be
+    // disabled, we need to not write it at all rather than defining it to zero, hence why we turn many values that seem
+    // like they should just be `bool` into optionals.
+    const fficonfig_h = b.addConfigHeader(.{
+        .style = .{ .autoconf_undef = upstream.path("fficonfig.h.in") },
+        .include_path = "fficonfig.h",
+    }, .{
+        .AC_APPLE_UNIVERSAL_BUILD = null, // Not used.
+        .EH_FRAME_FLAGS = "a",
+        .FFI_DEBUG = null,
+        .FFI_EXEC_STATIC_TRAMP = switch (t.os.tag) {
+            .linux => if (t.cpu.arch.isArm() or t.cpu.arch.isAARCH64() or t.cpu.arch.isLoongArch() or t.cpu.arch.isPowerPC() or t.cpu.arch == .s390x or t.cpu.arch.isX86()) true else null,
+            else => null,
+        },
+        .FFI_EXEC_TRAMPOLINE_TABLE = if (t.cpu.arch == .aarch64 and t.os.tag.isDarwin()) true else null,
+        .FFI_MMAP_EXEC_EMUTRAMP_PAX = null, // TODO: Perhaps make this configurable.
+        .FFI_MMAP_EXEC_WRIT = switch (t.os.tag) {
+            .dragonfly, .freebsd, .openbsd, .illumos => true,
+            else => if (t.os.tag.isDarwin() or t.abi.isAndroid()) true else null,
+        },
+        .FFI_NO_RAW_API = null,
+        .FFI_NO_STRUCTS = null,
+        .HAVE_ALLOCA_H = if (t.os.tag != .windows and (!t.os.tag.isBSD() or t.os.tag.isDarwin())) true else null,
+        .HAVE_ARM64E_PTRAUTH = null, // TODO: https://github.com/ziglang/fetch-them-macos-headers/issues/28
+        .HAVE_AS_CFI_PSEUDO_OP = true,
+        .HAVE_AS_REGISTER_PSEUDO_OP = if (t.cpu.arch.isSPARC()) true else null,
+        .HAVE_AS_S390_ZARCH = if (t.cpu.arch == .s390x) true else null,
+        .HAVE_AS_SPARC_UA_PCREL = true,
+        .HAVE_AS_X86_64_UNWIND_SECTION_TYPE = if (t.cpu.arch == .x86_64) true else null,
+        .HAVE_AS_X86_PCREL = true,
+        .HAVE_DLFCN_H = if (t.os.tag != .windows) true else null,
+        .HAVE_HIDDEN_VISIBILITY_ATTRIBUTE = if (t.os.tag != .windows) true else null,
+        .HAVE_INTTYPES_H = true,
+        .HAVE_LONG_DOUBLE_VARIANT = if (long_double_variant) true else null,
+        .HAVE_MEMCPY = true,
+        .HAVE_MEMFD_CREATE = switch (t.os.tag) {
+            .linux, .freebsd => true,
+            // `memfd_create` will be added in NetBSD 11.0: https://man.netbsd.org/memfd_create.2
+            .netbsd => if (t.os.version_range.semver.isAtLeast(.{ .major = 11, .minor = 0, .patch = 0 }) orelse false) true else null,
+            else => null,
+        },
+        .HAVE_RO_EH_FRAME = true,
+        .HAVE_STDINT_H = true,
+        .HAVE_STDIO_H = true,
+        .HAVE_STDLIB_H = true,
+        .HAVE_STRINGS_H = if (t.abi != .msvc and t.abi != .itanium) true else null,
+        .HAVE_STRING_H = true,
+        .HAVE_SYS_MEMFD_H = null,
+        .HAVE_SYS_STAT_H = if (t.abi != .msvc and t.abi != .itanium) true else null,
+        .HAVE_SYS_TYPES_H = if (t.abi != .msvc and t.abi != .itanium) true else null,
+        .HAVE_UNISTD_H = true,
+        .LIBFFI_GNU_SYMBOL_VERSIONING = null,
+        .LT_OBJDIR = null, // Not used.
+        .PACKAGE = "libffi",
+        .PACKAGE_BUGREPORT = "https://github.com/allyourcodebase/libffi/issues",
+        .PACKAGE_NAME = "libffi",
+        .PACKAGE_STRING = "libffi " ++ manifest.version,
+        .PACKAGE_TARNAME = "libffi",
+        .PACKAGE_URL = "",
+        .PACKAGE_VERSION = manifest.version,
+        .SIZEOF_DOUBLE = double_size,
+        .SIZEOF_LONG_DOUBLE = long_double_size,
+        .SIZEOF_SIZE_T = t.ptrBitWidth() / 8,
+        .STDC_HEADERS = true,
+        .SYMBOL_UNDERSCORE = if ((t.cpu.arch == .x86 and t.os.tag == .windows) or t.os.tag.isDarwin()) true else null,
+        .USING_PURIFY = null,
+        .VERSION = manifest.version,
+        .WORDS_BIGENDIAN = if (t.cpu.arch.endian() == .big) true else null,
+    });
 
-    const flags: []const []const u8 = &.{if (os != .windows) "-fvisibility=hidden" else ""};
+    // This is done slightly awkwardly because we need the macro value to be emitted literally, rather than as a string.
+    switch (long_double) {
+        .false => fficonfig_h.addValues(.{ .HAVE_LONG_DOUBLE = null }),
+        .true => fficonfig_h.addValues(.{ .HAVE_LONG_DOUBLE = 1 }),
+        .mips64 => fficonfig_h.addValues(.{ .HAVE_LONG_DOUBLE = .@"defined(__mips64)" }),
+    }
 
-    const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
-    mod.addConfigHeader(ffi_h);
-    mod.addIncludePath(config_wf.getDirectory());
-    mod.addIncludePath(upstream.path("include"));
-    mod.addIncludePath(upstream.path(arch_dir));
-    mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = srcs });
-    mod.addCSourceFiles(.{ .root = src, .flags = flags, .files = arch_srcs });
-    for (arch_asm) |asm_file| mod.addAssemblyFile(src.path(b, asm_file));
+    inline for (.{ fficonfig_h, ffi_h }) |hdr|
+        mod.addConfigHeader(hdr);
 
     const lib = b.addLibrary(.{
+        .linkage = linkage orelse .static,
         .name = "ffi",
         .root_module = mod,
-        .linkage = options.linkage,
-        .version = try .parse(manifest.version),
+        .version = version,
     });
-    lib.installConfigHeader(ffi_h);
-    lib.installHeader(upstream.path(b.pathJoin(&.{ arch_dir, "ffitarget.h" })), "ffitarget.h");
-    b.installArtifact(lib);
-}
 
-const srcs: []const []const u8 = &.{
-    "src/prep_cif.c",     "src/types.c",    "src/raw_api.c",
-    "src/java_raw_api.c", "src/closures.c", "src/tramp.c",
-};
+    b.installArtifact(lib);
+
+    // libffi has historically put its header files directly in the include path, rather than a subdirectory.
+    lib.installConfigHeader(ffi_h);
+    lib.installHeader(upstream.path(b.pathJoin(&.{ "src", arch_name, "ffitarget.h" })), "ffitarget.h");
+}

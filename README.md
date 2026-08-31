@@ -1,20 +1,25 @@
-# libffi zig
+[![CI](https://github.com/allyourcodebase/libffi/actions/workflows/ci.yaml/badge.svg)](https://github.com/allyourcodebase/libffi/actions)
 
-[libffi](https://github.com/libffi/libffi), packaged for the Zig build system.
+# libffi
 
-Supports x86_64, x86, aarch64, and arm on Linux, macOS, and BSDs.
+This is [libffi](https://sourceware.org/libffi/), packaged for [Zig](https://ziglang.org/).
 
-## Using
+## Installation
 
 First, update your `build.zig.zon`:
 
 ```
+# Initialize a `zig build` project if you haven't already
+zig init
 zig fetch --save git+https://github.com/allyourcodebase/libffi.git
 ```
 
-Then in your `build.zig`:
+You can then import `libffi` in your `build.zig` with:
 
 ```zig
-const libffi = b.dependency("libffi", .{ .target = target, .optimize = optimize });
-exe.linkLibrary(libffi.artifact("ffi"));
+const libffi = b.dependency("libffi", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.linkLibrary(libffi.artifact("ffi"));
 ```
