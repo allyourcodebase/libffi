@@ -209,8 +209,8 @@ pub fn build(b: *std.Build) !void {
     inline for (.{ "include", "src", b.pathJoin(&.{ "src", arch_name }) }) |inc|
         mod.addIncludePath(upstream.path(inc));
 
-    const double_size = t.cTypeByteSize(.double);
-    const long_double_size = t.cTypeByteSize(.longdouble);
+    const double_size = t.cTypeByteSize(.double).?;
+    const long_double_size = t.cTypeByteSize(.longdouble).?;
 
     const long_double_variant = switch (t.os.tag) {
         .freebsd, .netbsd, .openbsd => t.cpu.arch == .powerpc,
