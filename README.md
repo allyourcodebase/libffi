@@ -1,4 +1,4 @@
-[![CI](https://github.com/allyourcodebase/libffi/actions/workflows/ci.yaml/badge.svg)](https://github.com/allyourcodebase/libffi/actions)
+[![CI](https://github.com/allyourcodebase/libffi/actions/workflows/ci.yml/badge.svg)](https://github.com/allyourcodebase/libffi/actions)
 
 # libffi
 
