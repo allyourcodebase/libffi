@@ -2,7 +2,7 @@
     .name = .libffi,
     .fingerprint = 0x806ae67927da1142, // Changing this has security and trust implications.
     .version = "3.5.2",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{
         "LICENSE",
         "README.md",
