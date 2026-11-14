@@ -9,6 +9,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information in binaries");
+    const pic = b.option(bool, "pic", "Build position independent code");
     const code_model = b.option(std.builtin.CodeModel, "code-model", "Assume a particular code model") orelse .default;
 
     const mod = b.createModule(.{
@@ -17,6 +18,7 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true, // libffi requires libc.
         .single_threaded = false, // libffi requires libpthread.
         .strip = strip,
+        .pic = pic,
         .code_model = code_model,
     });
 
